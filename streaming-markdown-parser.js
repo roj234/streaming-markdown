@@ -7,8 +7,29 @@ https://github.com/thetarnav/streaming-markdown
 Modified by Roj234
 BSD-3 License
 Copyright 2026 Roj234
-https://github.com/roj234/better-marked
+https://github.com/roj234/streaming-markdown
 */
+
+export const VOID_TAGS = /*#__PURE__*/ new Set(["area","base","br","col","embed","hr","img","input","link","meta","source","track","wbr"]);
+
+/**
+ *
+ * @param {string[]} tags
+ * @param tree
+ * @return {Map<string, string | 0>}
+ */
+export const createTrieTree = (tags, tree = new Map) => {
+	tree.set("", 0);
+	for (let tag of tags) {
+		for (let i = 0;;) {
+			const end = ++i === tag.length;
+			const prefix = tag.slice(0, i);
+			if (end) { tree.set(prefix, tag); break; }
+			if (!tree.has(prefix)) tree.set(prefix, 0);
+		}
+	}
+	return tree;
+};
 
 export const
 	DOCUMENT        =  1,
@@ -46,29 +67,32 @@ export const
 	MAYBE_URL       = 102,
 	MAYBE_TASK      = 103,
 	MAYBE_BR        = 104,
-	MAYBE_EQ_BLOCK  = 105
+	MAYBE_EQ_BLOCK  = 105,
+	HTML_ELEMENT    = 32,
+	QUOTE           = 33,
+	HTML_ATTR= 34,
+	HTML_ATTR_VAL = 35
+;
 
-const INLINE_PREFIX = new Map;
-/*INLINE_PREFIX.set(CODE_INLINE, '`');
-INLINE_PREFIX.set(ITALIC_AST, '*');
-INLINE_PREFIX.set(ITALIC_UND, '_');
-INLINE_PREFIX.set(STRONG_AST, '*');
-INLINE_PREFIX.set(STRONG_UND, '_');
-INLINE_PREFIX.set(STRIKE, '~~');*/
-INLINE_PREFIX.set(LINK, '[');
-INLINE_PREFIX.set(IMAGE, '![');
-INLINE_PREFIX.set(EQUATION_INLINE, '$');
+const INLINE_TOKEN_PREFIX = new Map;
+INLINE_TOKEN_PREFIX.set(CODE_INLINE, '`');
+INLINE_TOKEN_PREFIX.set(ITALIC_AST, '*');
+INLINE_TOKEN_PREFIX.set(ITALIC_UND, '_');
+INLINE_TOKEN_PREFIX.set(STRONG_AST, '**');
+INLINE_TOKEN_PREFIX.set(STRONG_UND, '__');
+//INLINE_PREFIX.set(STRIKE, '~~');
+INLINE_TOKEN_PREFIX.set(LINK, '[');
+INLINE_TOKEN_PREFIX.set(IMAGE, '![');
+INLINE_TOKEN_PREFIX.set(EQUATION_INLINE, '$');
+INLINE_TOKEN_PREFIX.set(QUOTE, '');
 
 export const
-	HREF    = 0,
-	SRC     = 1,
-	LANG    = 2,
-	CHECKED = 3,
-	START   = 4,
-	TITLE   = 5,
-	ALIGN   = 6;
-
-export const ATTRIBUTE_NAMES = ["href", "src", "lang", "checked", "start", "title", "align"];
+	HREF    = "href",
+	SRC     = "src",
+	LANG    = "lang",
+	CHECKED = "checked",
+	START   = "start",
+	ALIGN   = "align";
 
 /**
  * Makes a new Parser object.
@@ -77,7 +101,7 @@ export const ATTRIBUTE_NAMES = ["href", "src", "lang", "checked", "start", "titl
  * @returns {Parser}
  * @constructor
  */
-export function FastMDParser(renderer, options = {}) {
+export function createMarkdownParser(renderer, options = {}) {
 	return {
 		renderer,
 		options,
@@ -104,11 +128,26 @@ export function FastMDParser(renderer, options = {}) {
 			parser_write(this, chunk);
 		},
 		end() {
-			if (this.pending) parser_write(this, "\n\n");
+			const p = this;
+			p.options = {
+				...p.options,
+				parseQuotes: false
+			};
+
+			if (p.pending) parser_write(p, "\n");
+
+			//*哈`基"米
+			for (;;) {
+				let prefix = INLINE_TOKEN_PREFIX.get(p.token);
+				if (null == prefix) break;
+				retractWithPrefix(p, prefix, "");
+			}
+
+			if (p.pending) parser_write(p, "\n");
 
 			// 让未结束的代码块能语法高亮，也许还有其它side-effect?
-			this.token = this.tokens.at(-1);
-			end_tokens_to_len(this, 0);
+			p.token = p.tokens.at(-1);
+			end_tokens_to_len(p, 0);
 		}
 	}
 }
@@ -116,41 +155,44 @@ export function FastMDParser(renderer, options = {}) {
 /**
  * @param {Parser} p
  */
-function flush_text(p) {
+const flush_text = p => {
 	if (!p.text) return
 	console.assert(p.tokens.length > 1, "Never adding text to root")
 	p.renderer.add_text(p.text, p);
 	p.prev_text = p.text.slice(-1);
 	p.text = ""
-}
+};
 
 /**
  * @param {Parser} p
  * @return {string}
  */
-function get_last_char(p) {
-	return p.text.slice(-1) ?? p.prev_text;
-}
+const get_last_char = p => p.text.slice(-1) || p.prev_text || "";
+
+const URL_VALID_CHARS = /[a-zA-Z0-9%/!@#$&*()_+~=,.?';:-]/;
+const SPACE_LIKE = new Set(" \r\n\t，。：？；’”）】》".split(""));
+const DELIMITER = new Set("(（“‘《【".split(""));
+const DELIMITER2 = new Set("*(),:".split("")); // no space, only after??
+//const regex = /\p{Z}\p{S}\p{P}/u;
+const isSpaceLike = char => !char.length || SPACE_LIKE.has(char);
+const isValidLatexBegin = char => isSpaceLike(char) || DELIMITER.has(char);
+const isValidLatexEnd = char => isValidLatexBegin(char) || DELIMITER2.has(char);
 
 /**
  * @param {Parser} p
  * @param {boolean=} undo_prefix
  */
-function end_token(p, undo_prefix) {
+const end_token = (p, undo_prefix) => {
 	const token = p.token;
 	p.token = p.tokens[--p.tokens.length - 1];
-	if (undo_prefix) {
-		return p.renderer.end_token(token, p, true);
-	} else {
-		p.renderer.end_token(token, p, false);
-	}
-}
+	return p.renderer.end_token(token, p, undo_prefix);
+};
 
 /**
  * @param {Parser} p
  * @param {number} token
  */
-function add_token(p, token) {
+const add_token = (p, token, arg3) => {
 	const prev = p.tokens.at(-1);
 	if ((prev === LIST_ORDERED || prev === LIST_UNORDERED) && token !== LIST_ITEM) {
 		end_token(p)
@@ -158,8 +200,8 @@ function add_token(p, token) {
 
 	p.tokens.push(token);
 	p.token = token;
-	p.renderer.add_token(token, p);
-}
+	p.renderer.add_token(token, p, arg3);
+};
 
 /**
  * End tokens until the parser has the given length.
@@ -167,10 +209,15 @@ function add_token(p, token) {
  * @param {number} len
  */
 function end_tokens_to_len(p, len) {
+	//if (!len) p.skipNextBr = 0;
+
 	// TODO: specific token state should be reset only when the token ends
 	p.fence_start = 0
 
-	while ((p.tokens.length - 1) > len) end_token(p)
+	while ((p.tokens.length - 1) > len) {
+		if (p.tokens.at(-1) === HTML_ELEMENT) break;
+		end_token(p)
+	}
 }
 
 /**
@@ -178,15 +225,19 @@ function end_tokens_to_len(p, len) {
  * @param {number} indent
  * @returns {number} */
 function end_tokens_to_indent(p, indent) {
+	if (!indent) p.skipNextBr = 0;
+
 	let i;
 	for (i = 0; i < p.tokens.length; i++) {
-		indent -= p.spaces[i] || 0;
-		if (indent <= 0) break;
+		if ((p.spaces[i] || 0) >= indent) break;
 	}
 
-	while ((p.tokens.length - 1) > i) {end_token(p)}
+	while ((p.tokens.length - 1) > i) {
+		if (p.tokens.at(-1) === HTML_ELEMENT) break;
+		end_token(p);
+	}
 
-	return indent
+	//return indent
 }
 
 /**
@@ -205,11 +256,9 @@ function continue_or_add_list(p, list_token) {
 	let list_idx = -1
 	let item_idx = -1
 
-	let sumIndent = 0;
 	for (let i = p.blockquote_idx+1; i < p.tokens.length; i++) {
-		sumIndent += p.spaces[i] || 0;
 		if (p.tokens[i] === LIST_ITEM) {
-			if (p.indent_len < sumIndent) {
+			if (p.indent_len < p.spaces[i]) {
 				item_idx = -1
 				break
 			}
@@ -240,8 +289,9 @@ function continue_or_add_list(p, list_token) {
  * @param {number} prefix_length
  * @returns {void} */
 function add_list_item(p, prefix_length) {
+	p.skipNextBr = 0;
 	add_token(p, LIST_ITEM)
-	p.spaces[(p.tokens.length - 1)] = prefix_length
+	p.spaces[(p.tokens.length - 1)] = p.indent_len + prefix_length
 	clear_root_pending(p)
 	p.token = MAYBE_TASK
 }
@@ -275,17 +325,31 @@ function retractWithPrefix(p, prefix, postfix) {
 	parser_write(p, retract);
 }
 
+function closeHtmlTag(p) {
+	flush_text(p);
+	p.pending = "";
+	// TODO is this required ?
+	end_tokens_to_len(p, 0);
+	end_token(p);
+}
+
 /**
  * Parse and render another chunk of markdown.
  * @param {Parser} p
  * @param {string} chunk
  */
 function parser_write(p, chunk) {
-	for (const char of chunk) {
+	for (let char of chunk) {
 		if (p.token === NEWLINE) {
 			switch (char) {
 				case ' ': p.indent_len += 1; continue
 				case '\t': p.indent_len += 4; continue
+				case '>':
+					if (p.blockquote_depth) {
+						p.blockquote_depth--;
+						p.indent_len --;
+						continue
+					}
 			}
 
 			let indent = p.indent_len - p.spaces[p.tokens.length-1];//end_tokens_to_indent(p, p.indent_len)
@@ -296,6 +360,19 @@ function parser_write(p, chunk) {
 
 			if (indent > 0) {
 				parser_write(p, " ".repeat(indent))
+			}
+		}
+
+		if (p.token === HTML_ELEMENT) {
+			if (char !== '<') {
+				// 禁用某些标签中的 markdown 解析
+				const tagId = p.tag_id;
+				if (p.options.textTags?.has(tagId) || tagId === "style" || tagId === "script") {
+					p.text += p.pending;
+					p.pending = '';
+				}
+			} else {
+				p.token = MAYBE_BR;
 			}
 		}
 
@@ -311,6 +388,10 @@ function parser_write(p, chunk) {
 			case LIST_ORDERED:
 			case LIST_UNORDERED:
 				console.assert(p.text.length === 0, "Root should not have any text")
+			// noinspection FallThroughInSwitchStatementJS
+			case HTML_ELEMENT:
+				// HTML_ELEMENT only
+				flush_text(p);
 
 				switch (p.pending[0]) {
 					case undefined:
@@ -330,18 +411,30 @@ function parser_write(p, chunk) {
 						continue
 					case '\n':
 						console.assert(p.pending.length === 1)
+						p.prev_text = '\n';
 						/*
 						 Lists can have an empty line in between items:
 						 1. foo
 						 <empty>
 						 2. bar
 						*/
-						if (p.tokens.at(-1) === LIST_ITEM && p.token === LINE_BREAK) {
-							end_token(p)
-							clear_root_pending(p)
-							p.pending = char
-							continue
+						if (p.token === LINE_BREAK) {
+							switch (p.tokens.at(-1)) {
+								case LIST_ITEM:
+									p.skipNextBr = 1;
+									break
+
+								case ITALIC_AST:
+								case STRONG_AST:
+								case ITALIC_UND:
+								case STRONG_UND:
+								case CODE_INLINE:
+									retractWithPrefix(p, INLINE_TOKEN_PREFIX.get(p.tokens.at(-1)), char);
+									p.pending = char;
+									continue;
+							}
 						}
+
 						/*
 						 Exit out of tokens
 						 And ignore newlines in root
@@ -497,6 +590,7 @@ function parser_write(p, chunk) {
 								}
 								clear_root_pending(p)
 								p.token = NEWLINE
+								p.blockquote_depth = p.blockquote_idx && p.tokens.filter(t => t === BLOCKQUOTE).length;
 								continue
 							}
 							default:
@@ -556,19 +650,26 @@ function parser_write(p, chunk) {
 				let to_write = pending_with_char
 
 				/* Add a line break and continue in previous token */
-				if (p.token === LINE_BREAK) {
+				if (p.token === LINE_BREAK || p.skipNextBr) {
+					if (p.skipNextBr === 1) end_tokens_to_len(p, p.blockquote_idx);
+
 					p.token = p.tokens.at(-1);
-					delete p.ignored;
-					delete p.prev_text;
-					if (p.end_with_space || p.options.preserveLineBreaks) {
-						p.renderer.add_token(LINE_BREAK, p);
-						p.renderer.end_token(LINE_BREAK, p);
+
+					// TODO better latex parse ??
+					if (!p.skipNextBr && to_write !== "$$") {
+						if ((p.end_with_space || p.options.preserveLineBreaks)) {
+							p.renderer.add_token(LINE_BREAK, p);
+							p.renderer.end_token(LINE_BREAK, p);
+						} else {
+							p.text += " ";
+						}
 					} else {
-						p.text += " ";
+						p.prev_text = '\n';
 					}
+					p.skipNextBr = 0;
 				}
 				/* Code Block */
-				else if (p.indent_len >= 4) {
+				else if (p.indent_len >= 4 && p.options.parseCodeBlock) {
 					/*
 					Case where there are additional spaces
 					after the indent that makes the code block
@@ -592,8 +693,10 @@ function parser_write(p, chunk) {
 					add_token(p, CODE_BLOCK)
 				}
 				/* Paragraph */
-				else {
-					add_token(p, PARAGRAPH)
+				else if (p.token !== HTML_ELEMENT) {
+					add_token(p, PARAGRAPH);
+				} else {
+					break;
 				}
 
 				clear_root_pending(p)
@@ -636,10 +739,9 @@ function parser_write(p, chunk) {
 						case "\n":
 							end_token(p)
 							clear_root_pending(p)
-							p.token = LINE_BREAK;
+							//p.token = LINE_BREAK;
 							p.pending = ""
 							p.table_state = 0
-							//debugger
 							parser_write(p, char)
 							continue
 					}
@@ -677,6 +779,11 @@ function parser_write(p, chunk) {
 					p.pending = ""
 					parser_write(p, char)
 					continue
+				}
+				if (char === "\n") {
+					//retractWithPrefix(p, "", "");
+					const s = end_token(p, true);
+					parser_write(p, s);
 				}
 				break
 			case CODE_BLOCK:
@@ -717,19 +824,32 @@ function parser_write(p, chunk) {
 
 						p.pending = pending_with_char
 						continue
+					default:
+						if (p.options.allowNestedCodeFence3 && p.pending && !p.fence_line && p.fence_start === 3) {
+							const flag = p.pending.trim().length === p.fence_start;
+							if (flag) p.fence_depth = (p.fence_depth || 0) + 1;
+						}
+						break;
 					case '\n':
 						/*  ```\n<code>\n```\n
 						|                    ^
 						*/
-						if (pending_with_char.trim().length === p.fence_start) {
-							flush_text(p)
-							end_token(p)
-							p.pending = ""
-							p.fence_start = 0
-							p.fence_line = 0
-							p.token = NEWLINE
-							continue
+						const flag = pending_with_char.trim().length === p.fence_start;
+						if (flag) {
+							if (!p.fence_depth) {
+								flush_text(p)
+								end_token(p)
+								p.pending = ""
+								p.fence_start = 0
+								p.fence_line = 0
+								p.blockquote_depth = 0;
+								p.blockquote_idx = 0;
+								p.token = DOCUMENT;
+								continue
+							}
+							p.fence_depth--;
 						}
+						p.blockquote_depth = p.blockquote_idx && p.tokens.filter(t => t === BLOCKQUOTE).length;
 						p.token = NEWLINE
 						break
 					case ' ':
@@ -755,7 +875,7 @@ function parser_write(p, chunk) {
 				const backtick_count = p.fence_start;
 
 				// (match = new RegExp(`(?:^|[^\`])\`{${backtick_count}}( )?$`).exec(p.pending))
-				function fuckRegexp() {
+				const fuckRegexp = () => {
 					const s = p.pending;
 					let i = s.length - 1;
 					let right = 0;
@@ -767,12 +887,12 @@ function parser_write(p, chunk) {
 						if (s[i--] !== '`') return false;
 					}
 
-					if (s[i] === '`') return false;
+					if (s[i] === '`' && p.text) return false;
 					return [
 						s.substring(0, i),
 						s.substring(i + backtick_count + 1)
 					];
-				}
+				};
 
 				if (char === '`' || (match = fuckRegexp())) {
 					// `[^`], 但是如果空格再多考虑一个字符
@@ -906,7 +1026,7 @@ function parser_write(p, chunk) {
 						else {
 							if (symbol === '_' && /\S/.test(char)) {
 								retractWithPrefix(p, '_', '');
-								p.text = p.pending;
+								p.text = pending_with_char;
 								p.pending = "";
 							} else {
 								flush_text(p)
@@ -947,15 +1067,17 @@ function parser_write(p, chunk) {
 				 \[?  or  $$?
 				   ^        ^
 				*/
-				const flag = p.options.allowInlineEquationBlock;
-				if (flag ? /\s/.test(char) : char === '\n') {
+
+				// [\n]$$\s?aaa\s?$$ or xx $$aa$$
+				if (!get_last_char(p).trim()) {
 					flush_text(p)
 					add_token(p, EQUATION_BLOCK)
 					p.eq_dollar = p.pending[0] === '$';
-					p.pending = ""
+					p.pending = char;
 					continue
 				}
 
+				p.text += p.pending;
 				ignore(p, MAYBE_EQ_BLOCK);
 				p.token = p.tokens.at(-1);
 				break;
@@ -964,13 +1086,14 @@ function parser_write(p, chunk) {
 					flush_text(p)
 					end_token(p)
 					p.pending = ""
+					p.skipNextBr = 2;
 					continue
 				}
 				break
 			case EQUATION_INLINE:
 				if (p.eq_dollar ? "$" === p.pending[0] : "\\)" === pending_with_char) {
 					// 使用$时，前后都没有空格
-					if (!p.eq_dollar || get_last_char(p).trim()) {
+					if (!p.eq_dollar || (!isSpaceLike(get_last_char(p)) && isValidLatexEnd(char))) {
 						flush_text(p)
 						end_token(p)
 
@@ -979,6 +1102,7 @@ function parser_write(p, chunk) {
 					}
 
 					retractWithPrefix(p, '$', '');
+					ignore(p, EQUATION_INLINE);
 				}
 				break
 			/* Raw URLs */
@@ -1013,7 +1137,7 @@ function parser_write(p, chunk) {
 					if ('(' === char) {
 						p.pending = pending_with_char
 					} else {
-						retractWithPrefix(p, INLINE_PREFIX.get(p.token), char);
+						retractWithPrefix(p, INLINE_TOKEN_PREFIX.get(p.token), char);
 					}
 					continue
 				}
@@ -1032,7 +1156,7 @@ function parser_write(p, chunk) {
 						p.pending = ""
 					} else {
 						if (char === "\n") {
-							retractWithPrefix(p, INLINE_PREFIX.get(p.token), char);
+							retractWithPrefix(p, INLINE_TOKEN_PREFIX.get(p.token), char);
 						} else {
 							p.pending += char
 						}
@@ -1044,10 +1168,7 @@ function parser_write(p, chunk) {
 				/* http://example.com?
 									 ^
 				*/
-				if (' ' === char ||
-					'\n'=== char ||
-					'\\'=== char
-				) {
+				if (!URL_VALID_CHARS.test(char)) {
 					p.renderer.set_attr(HREF, p.pending)
 					flush_text(p)
 					end_token(p)
@@ -1057,33 +1178,113 @@ function parser_write(p, chunk) {
 					p.pending = pending_with_char
 				}
 				continue
-			case MAYBE_BR:
-				if (pending_with_char.startsWith("<br")) {
-					if (/* "<br" */
-						pending_with_char.length === 3 ||
-						/* "<br " */
-						char === ' ' ||
-						/* "<br/" | "<br /" */
-						char === '/' && (pending_with_char.length === 4 ||
-							p.pending[p.pending.length-1] === ' ')
-					) {
-						p.pending = pending_with_char
-						continue
+			case HTML_ATTR_VAL:
+				if (p.tag_st === 2) {
+					p.tag_st = 1;
+					// escape
+					switch (char) {
+						case 'b': char = '\b'; break;
+						case 'f': char = '\f'; break;
+						case 'n': char = '\n'; break;
+						case 'r': char = '\r'; break;
+						case 't': char = '\t'; break;
 					}
+					p.pending += char;
+					continue;
+				} else {
+					// noinspection FallThroughInSwitchStatementJS
+					switch (char) {
+						case '\\':
+							const orig = p.tag_st;
+							p.tag_st = 2;
+							if (orig === 1) continue;
+							// fallthrough: 强行结束不合法的属性
 
-					/* "<br>" | "<br/>" */
-					if (char === '>') {
-						flush_text(p)
-						p.token = p.tokens.at(-1)
-						p.renderer.add_token(LINE_BREAK, p)
-						p.renderer.end_token(LINE_BREAK, p)
-						p.pending = ""
-						continue
+						case '"':
+							if (!p.tag_st) {
+								p.tag_st = 1;
+								continue;
+							}
+							else p.tag_st = 0;
+
+						case ' ':
+							if (!p.tag_st) {
+								//console.log("set_attr", p.tag_attr, p.pending);
+								p.renderer.set_attr(p.tag_attr, p.pending);
+								p.pending = "";
+								p.token = HTML_ATTR;
+								continue;
+							}
 					}
 				}
+				p.pending = pending_with_char;
+				continue;
+			case HTML_ATTR:
+				switch (char) {
+					default: p.pending = pending_with_char; break;
+					case "=":
+						p.tag_attr = p.pending.trim();
+						p.pending = '';
+						p.token = HTML_ATTR_VAL;
+						break;
+					case '>':
+						p.token = HTML_ELEMENT;
+						if (pending_with_char.endsWith("/>") || VOID_TAGS.has(p.tag_id)) {
+							closeHtmlTag(p);
+						}
+						break;
+				}
+				continue;
+			case MAYBE_BR:
+				let htmlTags = p.options.allowedTags;
+				const pending = p.pending;
+				if (htmlTags) {
+					if (!(htmlTags instanceof Map)) {
+						p.options.allowedTags = htmlTags = createTrieTree(htmlTags);
+					}
+
+					const END = pending[1] === "/" ? "/" : "";
+					if (END) {
+						const rest = pending.slice(2);
+						if (htmlTags.has(rest)) {
+							p.pending = pending_with_char;
+							if (htmlTags.get(rest) && char === '>') {
+								closeHtmlTag(p);
+								p.skipNextBr = 2;
+								//end_tokens_to_len(p, 0);
+							}
+							continue;
+						}
+					} else {
+						const rest = pending.slice(1);
+						if (!pending || pending[0] === '<' && htmlTags.has(rest)) {
+							p.pending = pending_with_char;
+
+							const tag = htmlTags.get(rest);
+							if (tag && /[ />]/.test(char)) {
+								flush_text(p);
+								p.pending = "";
+
+								if (tag[0] === "!") {
+									end_tokens_to_len(p, 0);
+								} else {
+									add_token(p, HTML_ELEMENT, tag);
+									p.tag_id = tag;
+									if (char !== '>') {
+										p.token = HTML_ATTR;
+									} else if (VOID_TAGS.has(tag)) {
+										closeHtmlTag(p);
+									}
+								}
+							}
+							continue;
+						}
+					}
+				}
+
 				// Fail
 				p.token = p.tokens.at(-1)
-				p.text += '<'
+				p.text += p.pending[0];
 				p.pending = p.pending.slice(1)
 				parser_write(p, char)
 				continue
@@ -1123,7 +1324,10 @@ function parser_write(p, chunk) {
 				}
 			/* Newline */
 			case '\n':
+				delete p.ignored;
+
 				switch (p.token) {
+					case HTML_ELEMENT:
 					case EQUATION_BLOCK:
 						break
 					case HEADING_1:
@@ -1142,13 +1346,16 @@ function parser_write(p, chunk) {
 						continue;
 					case LINK:
 					case IMAGE:
-						retractWithPrefix(p, INLINE_PREFIX.get(p.token), char);
+						retractWithPrefix(p, INLINE_TOKEN_PREFIX.get(p.token), char);
 						continue;
 					default:
 						flush_text(p)
 						p.pending = char
-						p.token = LINE_BREAK
+						p.token = LINE_BREAK;
 						p.blockquote_idx = 0
+
+						//delete p.prev_text;
+						p.prev_text = "\n";
 						continue
 				}
 				break
@@ -1187,6 +1394,24 @@ function parser_write(p, chunk) {
 					p.pending = ""
 				}
 				continue
+			case '"':
+			case '“':
+			case '”':
+				if (p.token !== EQUATION_INLINE && p.token !== EQUATION_BLOCK && p.options.parseQuotes) {
+					if (p.token === QUOTE) {
+						p.text += p.pending;
+						p.pending = "";
+						flush_text(p);
+						end_token(p);
+					} else {
+						flush_text(p);
+						p.text += p.pending;
+						p.pending = "";
+						add_token(p, QUOTE);
+					}
+				}
+
+				break;
 			case '_':
 			case '*': {
 				if (p.token === IMAGE ||
@@ -1217,8 +1442,7 @@ function parser_write(p, chunk) {
 					/* *Em*
 						^
 					*/
-					const lastChar = get_last_char(p);
-					if ('\n' !== char && ' ' !== char && (symbol !== '_' || /^\s?$/.test(lastChar))) {
+					if ('\n' !== char && ' ' !== char && (symbol !== '_' || isSpaceLike(get_last_char(p)))) {
 						flush_text(p)
 						add_token(p, italic);
 						p.pending = char
@@ -1238,8 +1462,7 @@ function parser_write(p, chunk) {
 					/* **Strong**
 						 ^
 					*/
-					const lastChar = get_last_char(p);
-					if ('\n' !== char && ' ' !== char && (symbol !== '_' || /^\s?$/.test(lastChar))) {
+					if ('\n' !== char && ' ' !== char && (symbol !== '_' || isSpaceLike(get_last_char(p)))) {
 						flush_text(p)
 						add_token(p, strong)
 						p.pending = char
@@ -1279,12 +1502,12 @@ function parser_write(p, chunk) {
 				if (p.token !== IMAGE &&
 					p.token !== STRIKE &&
 					"$" === p.pending &&
-					!p.ignored?.has(MAYBE_EQ_BLOCK)
+					!p.ignored?.has(EQUATION_INLINE)
 				) {
 					/* $$\sEQUATION_BLOCK\s$$
 						^
 					*/
-					if ('$' === char) {
+					if ('$' === char && !p.ignored?.has(MAYBE_EQ_BLOCK) && ['\n', ''].includes(get_last_char(p))) {
 						p.token = MAYBE_EQ_BLOCK
 						p.pending = pending_with_char
 						continue
@@ -1298,7 +1521,7 @@ function parser_write(p, chunk) {
 					/* $EQUATION_INLINE$
 						^
 					*/
-					else if (/\S/.test(char)) {
+					else if (isValidLatexBegin(get_last_char(p))/* && (!p.options.requiredSpaceAfterDollar || /\S/.test(char))*/) {
 						flush_text(p)
 						add_token(p, EQUATION_INLINE)
 						p.eq_dollar = true;
@@ -1306,6 +1529,10 @@ function parser_write(p, chunk) {
 						continue
 					}
 				}
+
+				// 仅一次？
+				p.ignored?.delete(EQUATION_INLINE);
+				p.ignored?.delete(MAYBE_EQ_BLOCK);
 				break
 			/* [Image](url) */
 			case '[':
@@ -1337,6 +1564,7 @@ function parser_write(p, chunk) {
 					continue
 				}
 				if (char !== "\n") p.end_with_space = false;
+				//else p.prev_text = '\n';
 				break
 		}
 

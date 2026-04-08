@@ -1,16 +1,17 @@
 {
   "name": "fastmd",
-  "version": "1.0.0",
+  "version": "1.2.4",
   "type": "module",
-  "module": "./index.js",
+  "module": "streaming-markdown-parser.js",
+  "types": "streaming-markdown-parser.d.ts",
   "dependencies": {
     "katex": "^0.7.0"
   },
-  "types": "types.d.ts",
   "license": "BSD-3",
   "keywords": [
     "katex",
     "markdown",
+    "incremental",
     "stream",
     "parser",
     "render"
