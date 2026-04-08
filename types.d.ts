@@ -48,13 +48,15 @@ export const
 
 export const ATTRIBUTE_NAMES = ["href", "src", "lang", "checked", "start", "title", "align"];
 
-export function FastMDParser(renderer: Renderer, options: ParserOptions): Parser;
+export function FastMDParser(renderer: Renderer, options?: ParserOptions): Parser;
 
 export interface ParserOptions {
     // 输入中的每一个换行符都会换行，而不需要两个空格在末尾。
     preserveLineBreaks?: boolean;
     // 允许在行内渲染 $$ eq $$ 或 \[ eq \]
-    allowInlineEquationBlock?: boolean;
+    parseInlineEquationBlock?: boolean;
+    // 解析代码块（单纯通过缩进而不是```language开始的的纯文本块，后者叫CodeFence）
+    parseCodeBlock: boolean;
 }
 
 export interface Parser {

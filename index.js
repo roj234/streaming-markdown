@@ -180,13 +180,12 @@ function end_tokens_to_len(p, len) {
 function end_tokens_to_indent(p, indent) {
 	let i;
 	for (i = 0; i < p.tokens.length; i++) {
-		indent -= p.spaces[i] || 0;
-		if (indent <= 0) break;
+		if ((p.spaces[i] || 0) >= indent) break;
 	}
 
 	while ((p.tokens.length - 1) > i) {end_token(p)}
 
-	return indent
+	//return indent
 }
 
 /**
@@ -205,11 +204,9 @@ function continue_or_add_list(p, list_token) {
 	let list_idx = -1
 	let item_idx = -1
 
-	let sumIndent = 0;
 	for (let i = p.blockquote_idx+1; i < p.tokens.length; i++) {
-		sumIndent += p.spaces[i] || 0;
 		if (p.tokens[i] === LIST_ITEM) {
-			if (p.indent_len < sumIndent) {
+			if (p.indent_len < p.spaces[i]) {
 				item_idx = -1
 				break
 			}
@@ -241,7 +238,7 @@ function continue_or_add_list(p, list_token) {
  * @returns {void} */
 function add_list_item(p, prefix_length) {
 	add_token(p, LIST_ITEM)
-	p.spaces[(p.tokens.length - 1)] = prefix_length
+	p.spaces[(p.tokens.length - 1)] = p.indent_len + prefix_length
 	clear_root_pending(p)
 	p.token = MAYBE_TASK
 }
@@ -568,7 +565,7 @@ function parser_write(p, chunk) {
 					}
 				}
 				/* Code Block */
-				else if (p.indent_len >= 4) {
+				else if (p.indent_len >= 4 && p.options.parseCodeBlock) {
 					/*
 					Case where there are additional spaces
 					after the indent that makes the code block
@@ -947,7 +944,7 @@ function parser_write(p, chunk) {
 				 \[?  or  $$?
 				   ^        ^
 				*/
-				const flag = p.options.allowInlineEquationBlock;
+				const flag = p.options.parseInlineEquationBlock;
 				if (flag ? /\s/.test(char) : char === '\n') {
 					flush_text(p)
 					add_token(p, EQUATION_BLOCK)
@@ -970,7 +967,8 @@ function parser_write(p, chunk) {
 			case EQUATION_INLINE:
 				if (p.eq_dollar ? "$" === p.pending[0] : "\\)" === pending_with_char) {
 					// 使用$时，前后都没有空格
-					if (!p.eq_dollar || get_last_char(p).trim()) {
+					const lastChar = get_last_char(p);
+					if (!p.eq_dollar || !lastChar || lastChar.trim()) {
 						flush_text(p)
 						end_token(p)
 

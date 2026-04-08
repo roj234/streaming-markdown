@@ -76,10 +76,10 @@
 - 你行你上。我一直说，我上我真行，不是吗？
 
 ## 使用方法
-1. 编写一个渲染器，你可以参考[我的实现](https://github.com/roj234/aichat/blob/main/src/fastmd-renderer.js)
+1. 编写一个渲染器，你可以参考[我的实现](https://github.com/roj234/ai-chat/blob/main/src/fastmd-renderer.js)
 2. 参考用法：
    ```js
-   import {FastMDParser} from 'better-marked';
+   import {FastMDParser} from 'fastmd';
    const renderer = new HTMLRenderer(container, options);
    const parser = new FastMDParser(renderer);
    parser.write("# Hell");
@@ -88,3 +88,6 @@
    // 生成完毕之后调用 end
    parser.end();
    ```
+
+## TODO
+- 实现一个简单的HTML渲染器 & index.html
