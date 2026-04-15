@@ -555,8 +555,6 @@ function parser_write(p, chunk) {
 				/* Add a line break and continue in previous token */
 				if (p.token === LINE_BREAK) {
 					p.token = p.tokens.at(-1);
-					delete p.ignored;
-					delete p.prev_text;
 					if (p.end_with_space || p.options.preserveLineBreaks) {
 						p.renderer.add_token(LINE_BREAK, p);
 						p.renderer.end_token(LINE_BREAK, p);
@@ -944,8 +942,7 @@ function parser_write(p, chunk) {
 				 \[?  or  $$?
 				   ^        ^
 				*/
-				const flag = p.options.parseInlineEquationBlock;
-				if (flag ? /\s/.test(char) : char === '\n') {
+				if ((!get_last_char(p) || p.options.parseInlineEquationBlock) && /\s/.test(char)) {
 					flush_text(p)
 					add_token(p, EQUATION_BLOCK)
 					p.eq_dollar = p.pending[0] === '$';
@@ -1121,6 +1118,10 @@ function parser_write(p, chunk) {
 				}
 			/* Newline */
 			case '\n':
+				delete p.ignored;
+				// Really place at here?
+				delete p.prev_text;
+
 				switch (p.token) {
 					case EQUATION_BLOCK:
 						break
