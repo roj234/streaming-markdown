@@ -31,11 +31,8 @@ export const
     TABLE_CELL      = 29,
     EQUATION_BLOCK  = 30,
     EQUATION_INLINE = 31,
-    NEWLINE         = 101,
-    MAYBE_URL       = 102,
-    MAYBE_TASK      = 103,
-    MAYBE_BR        = 104,
-    MAYBE_EQ_BLOCK  = 105;
+    HTML_ELEMENT    = 32,
+    QUOTE           = 33;
 
 export const
     HREF    = 0,
@@ -57,6 +54,8 @@ export interface ParserOptions {
     parseInlineEquationBlock?: boolean;
     // 解析代码块（单纯通过缩进而不是```language开始的的纯文本块，后者叫CodeFence）
     parseCodeBlock: boolean;
+    // details, div, etc
+    allowedTags?: string[];
 }
 
 export interface Parser {

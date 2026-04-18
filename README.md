@@ -76,7 +76,7 @@
 - 你行你上。我一直说，我上我真行，不是吗？
 
 ## 使用方法
-1. 编写一个渲染器，你可以参考[我的实现](https://github.com/roj234/ai-chat/blob/main/src/fastmd-renderer.js)
+1. 编写一个渲染器，你可以参考[我的实现](https://github.com/roj234/ai-chat/blob/main/src/md-renderer.js)
 2. 参考用法：
    ```js
    import {FastMDParser} from 'fastmd';

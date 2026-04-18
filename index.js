@@ -46,7 +46,9 @@ export const
 	MAYBE_URL       = 102,
 	MAYBE_TASK      = 103,
 	MAYBE_BR        = 104,
-	MAYBE_EQ_BLOCK  = 105
+	MAYBE_EQ_BLOCK  = 105,
+	HTML_ELEMENT    = 32,
+	QUOTE           = 33;
 
 const INLINE_PREFIX = new Map;
 /*INLINE_PREFIX.set(CODE_INLINE, '`');
@@ -150,7 +152,7 @@ function end_token(p, undo_prefix) {
  * @param {Parser} p
  * @param {number} token
  */
-function add_token(p, token) {
+function add_token(p, token, arg3) {
 	const prev = p.tokens.at(-1);
 	if ((prev === LIST_ORDERED || prev === LIST_UNORDERED) && token !== LIST_ITEM) {
 		end_token(p)
@@ -158,7 +160,7 @@ function add_token(p, token) {
 
 	p.tokens.push(token);
 	p.token = token;
-	p.renderer.add_token(token, p);
+	p.renderer.add_token(token, p, arg3);
 }
 
 /**
@@ -170,7 +172,10 @@ function end_tokens_to_len(p, len) {
 	// TODO: specific token state should be reset only when the token ends
 	p.fence_start = 0
 
-	while ((p.tokens.length - 1) > len) end_token(p)
+	while ((p.tokens.length - 1) > len) {
+		if (p.tokens.at(-1) === HTML_ELEMENT) break;
+		end_token(p)
+	}
 }
 
 /**
@@ -183,7 +188,10 @@ function end_tokens_to_indent(p, indent) {
 		if ((p.spaces[i] || 0) >= indent) break;
 	}
 
-	while ((p.tokens.length - 1) > i) {end_token(p)}
+	while ((p.tokens.length - 1) > i) {
+		if (p.tokens.at(-1) === HTML_ELEMENT) break;
+		end_token(p);
+	}
 
 	//return indent
 }
@@ -278,6 +286,7 @@ function retractWithPrefix(p, prefix, postfix) {
  * @param {string} chunk
  */
 function parser_write(p, chunk) {
+	omgOuuuuter:
 	for (const char of chunk) {
 		if (p.token === NEWLINE) {
 			switch (char) {
@@ -1076,6 +1085,30 @@ function parser_write(p, chunk) {
 						continue
 					}
 				}
+				const allowedTags = p.options.allowedTags;
+				if (allowedTags) {
+					const END = pending_with_char[1] === "/" ? "/" : "";
+					for (const id of allowedTags) {
+						const marker = `<${END}${id}>`;
+						if (marker.startsWith(pending_with_char)) {
+							p.pending = pending_with_char;
+							if (pending_with_char === marker) {
+								flush_text(p);
+								p.pending = "";
+
+								if (END) {
+									end_tokens_to_len(p, 0);
+									p.token = HTML_ELEMENT;
+									end_token(p);
+								} else {
+									add_token(p, HTML_ELEMENT, id);
+								}
+							}
+							continue omgOuuuuter;
+						}
+					}
+				}
+
 				// Fail
 				p.token = p.tokens.at(-1)
 				p.text += '<'
@@ -1146,7 +1179,7 @@ function parser_write(p, chunk) {
 					default:
 						flush_text(p)
 						p.pending = char
-						p.token = LINE_BREAK
+						p.token = p.token === HTML_ELEMENT ? PARAGRAPH/* 不能是document */ : LINE_BREAK;
 						p.blockquote_idx = 0
 						continue
 				}
@@ -1186,6 +1219,18 @@ function parser_write(p, chunk) {
 					p.pending = ""
 				}
 				continue
+			case '"':
+			case '“':
+			case '”':
+				flush_text(p);
+				p.pending = "";
+				if (p.token === QUOTE) {
+					end_token(p);
+				} else {
+					add_token(p, QUOTE);
+				}
+
+				break;
 			case '_':
 			case '*': {
 				if (p.token === IMAGE ||
