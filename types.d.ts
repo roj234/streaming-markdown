@@ -54,6 +54,8 @@ export interface ParserOptions {
     parseInlineEquationBlock?: boolean;
     // 解析代码块（单纯通过缩进而不是```language开始的的纯文本块，后者叫CodeFence）
     parseCodeBlock: boolean;
+    // 解析（高亮）双引号
+    parseQuotes: boolean;
     // details, div, etc
     allowedTags?: string[];
 }

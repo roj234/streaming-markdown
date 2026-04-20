@@ -60,6 +60,7 @@ INLINE_PREFIX.set(STRIKE, '~~');*/
 INLINE_PREFIX.set(LINK, '[');
 INLINE_PREFIX.set(IMAGE, '![');
 INLINE_PREFIX.set(EQUATION_INLINE, '$');
+INLINE_PREFIX.set(QUOTE, '"');
 
 export const
 	HREF    = 0,
@@ -1222,12 +1223,18 @@ function parser_write(p, chunk) {
 			case '"':
 			case '“':
 			case '”':
-				flush_text(p);
-				p.pending = "";
-				if (p.token === QUOTE) {
-					end_token(p);
-				} else {
-					add_token(p, QUOTE);
+				if (p.options.parseQuotes) {
+					if (p.token === QUOTE) {
+						p.text += p.pending;
+						p.pending = "";
+						flush_text(p);
+						end_token(p);
+					} else {
+						flush_text(p);
+						p.text += p.pending;
+						p.pending = "";
+						add_token(p, QUOTE);
+					}
 				}
 
 				break;
