@@ -135,6 +135,10 @@ function get_last_char(p) {
 	return p.text.slice(-1) ?? p.prev_text;
 }
 
+const SPACE_LIKE = new Set(" \r\n\t，。：？；’”）】》".split(""));
+//const regex = /\p{Z}\p{S}\p{P}/u;
+function isSpaceLike(char) {return !char.length || SPACE_LIKE.has(char);}
+
 /**
  * @param {Parser} p
  * @param {boolean=} undo_prefix
@@ -952,7 +956,10 @@ function parser_write(p, chunk) {
 				 \[?  or  $$?
 				   ^        ^
 				*/
-				if ((!get_last_char(p) || p.options.parseInlineEquationBlock) && /\s/.test(char)) {
+
+				// [\n]$$\s?aaa\s?$$ or xx $$aa$$
+				const lastChar1 = get_last_char(p);
+				if (!lastChar1 || (p.options.parseInlineEquationBlock && isSpaceLike(get_last_char(p))/* && /\s/.test(char)*/)) {
 					flush_text(p)
 					add_token(p, EQUATION_BLOCK)
 					p.eq_dollar = p.pending[0] === '$';
@@ -974,8 +981,7 @@ function parser_write(p, chunk) {
 			case EQUATION_INLINE:
 				if (p.eq_dollar ? "$" === p.pending[0] : "\\)" === pending_with_char) {
 					// 使用$时，前后都没有空格
-					const lastChar = get_last_char(p);
-					if (!p.eq_dollar || !lastChar || lastChar.trim()) {
+					if (!p.eq_dollar || !isSpaceLike(get_last_char(p))) {
 						flush_text(p)
 						end_token(p)
 
@@ -1268,8 +1274,7 @@ function parser_write(p, chunk) {
 					/* *Em*
 						^
 					*/
-					const lastChar = get_last_char(p);
-					if ('\n' !== char && ' ' !== char && (symbol !== '_' || /^\s?$/.test(lastChar))) {
+					if ('\n' !== char && ' ' !== char && (symbol !== '_' || isSpaceLike(get_last_char(p)))) {
 						flush_text(p)
 						add_token(p, italic);
 						p.pending = char
@@ -1289,8 +1294,7 @@ function parser_write(p, chunk) {
 					/* **Strong**
 						 ^
 					*/
-					const lastChar = get_last_char(p);
-					if ('\n' !== char && ' ' !== char && (symbol !== '_' || /^\s?$/.test(lastChar))) {
+					if ('\n' !== char && ' ' !== char && (symbol !== '_' || isSpaceLike(get_last_char(p)))) {
 						flush_text(p)
 						add_token(p, strong)
 						p.pending = char
@@ -1349,7 +1353,7 @@ function parser_write(p, chunk) {
 					/* $EQUATION_INLINE$
 						^
 					*/
-					else if (/\S/.test(char)) {
+					else if (isSpaceLike(get_last_char(p))/* && (!p.options.requiredSpaceAfterDollar || /\S/.test(char))*/) {
 						flush_text(p)
 						add_token(p, EQUATION_INLINE)
 						p.eq_dollar = true;
