@@ -333,6 +333,12 @@ function closeHtmlTag(p) {
 	end_token(p);
 }
 
+function commitNoValueAttr(p) {
+	const tag_attr = p.pending.trim();
+	p.pending = '';
+	if (tag_attr) p.renderer.set_attr(tag_attr, '');
+}
+
 /**
  * Parse and render another chunk of markdown.
  * @param {Parser} p
@@ -381,29 +387,33 @@ function parser_write(p, chunk) {
 		/*
 		number specific checks
 		*/
+		big:
 		switch (p.token) {
+			case HTML_ELEMENT:
+				// HTML_ELEMENT only
+				flush_text(p);
+				if (get_last_char(p)) break;
+			// noinspection FallThroughInSwitchStatementJS
 			case LINE_BREAK:
 			case DOCUMENT:
 			case BLOCKQUOTE:
 			case LIST_ORDERED:
 			case LIST_UNORDERED:
-				console.assert(p.text.length === 0, "Root should not have any text")
-			// noinspection FallThroughInSwitchStatementJS
-			case HTML_ELEMENT:
-				// HTML_ELEMENT only
-				flush_text(p);
+				//if (p.token !== HTML_ELEMENT) console.assert(p.text.length === 0, "Root should not have any text")
 
 				switch (p.pending[0]) {
 					case undefined:
 						p.pending = char
 						continue
 					case ' ':
+						if (p.token === HTML_ELEMENT) break big;
 						console.assert(p.pending.length === 1)
 						p.pending = char
 						p.indent += ' '
 						p.indent_len += 1
 						continue
 					case '\t':
+						if (p.token === HTML_ELEMENT) break big;
 						console.assert(p.pending.length === 1)
 						p.pending = char
 						p.indent += '\t'
@@ -412,6 +422,11 @@ function parser_write(p, chunk) {
 					case '\n':
 						console.assert(p.pending.length === 1)
 						p.prev_text = '\n';
+						if (p.token === HTML_ELEMENT) {
+							p.token = LINE_BREAK;
+							p.pending = char;
+							continue;
+						}
 						/*
 						 Lists can have an empty line in between items:
 						 1. foo
@@ -420,6 +435,11 @@ function parser_write(p, chunk) {
 						*/
 						if (p.token === LINE_BREAK) {
 							switch (p.tokens.at(-1)) {
+								case HTML_ELEMENT:
+									p.renderer.add_token(LINE_BREAK, p);
+									p.renderer.end_token(LINE_BREAK, p);
+									break big;
+
 								case LIST_ITEM:
 									p.skipNextBr = 1;
 									break
@@ -1209,7 +1229,6 @@ function parser_write(p, chunk) {
 
 						case ' ':
 							if (!p.tag_st) {
-								//console.log("set_attr", p.tag_attr, p.pending);
 								p.renderer.set_attr(p.tag_attr, p.pending);
 								p.pending = "";
 								p.token = HTML_ATTR;
@@ -1222,12 +1241,15 @@ function parser_write(p, chunk) {
 			case HTML_ATTR:
 				switch (char) {
 					default: p.pending = pending_with_char; break;
-					case "=":
+					case ' ': commitNoValueAttr(p); break;
+					case '=':
 						p.tag_attr = p.pending.trim();
 						p.pending = '';
 						p.token = HTML_ATTR_VAL;
 						break;
 					case '>':
+						commitNoValueAttr(p);
+
 						p.token = HTML_ELEMENT;
 						if (pending_with_char.endsWith("/>") || VOID_TAGS.has(p.tag_id)) {
 							closeHtmlTag(p);
@@ -1269,6 +1291,7 @@ function parser_write(p, chunk) {
 									end_tokens_to_len(p, 0);
 								} else {
 									add_token(p, HTML_ELEMENT, tag);
+									p.skipNextBr = 2;
 									p.tag_id = tag;
 									if (char !== '>') {
 										p.token = HTML_ATTR;
@@ -1327,7 +1350,6 @@ function parser_write(p, chunk) {
 				delete p.ignored;
 
 				switch (p.token) {
-					case HTML_ELEMENT:
 					case EQUATION_BLOCK:
 						break
 					case HEADING_1:
