@@ -1,0 +1,7 @@
+import * as md from './streaming-markdown-parser.js';
+
+const names = Object.fromEntries(Object.entries(md).filter(([k,v])=>typeof v==='number').map(([k,v])=>[v,k]));
+let step=0;const renderer={add_text(t,p){console.log(step,'text',JSON.stringify(t),'tok',names[p.token],'stack',[...p.tokens].map(x=>names[x]).join('>'),'pending',JSON.stringify(p.pending),'indent',p.indent_len,'spaces',JSON.stringify(p.spaces),'bq',p.blockquote_idx);},add_token(tok,p,arg){console.log(step,'start',names[tok],'stack',[...p.tokens].map(x=>names[x]).join('>'),'pending',JSON.stringify(p.pending),'indent',p.indent_len,'spaces',JSON.stringify(p.spaces),'bq',p.blockquote_idx);},end_token(tok,p){console.log(step,'end',names[tok],'stack',[...p.tokens].map(x=>names[x]).join('>'),'pending',JSON.stringify(p.pending),'indent',p.indent_len,'spaces',JSON.stringify(p.spaces),'bq',p.blockquote_idx); return '';},set_attr(a,v){console.log('attr',a,v)}};
+const p=md.createMarkdownParser(renderer,{parseCodeBlock:true});
+const s='> - item\n> para\n';
+for (const ch of s){step++; console.log('\nCHAR',step,JSON.stringify(ch)); p.write(ch)}; p.end();

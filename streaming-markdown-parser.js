@@ -219,13 +219,24 @@ function close_pending_linebreak_or_leaf(p) {
  * @returns {boolean}
  */
 function can_continue_linebreak(p) {
+	const blockquote_idx = p.blockquote_idx || 0;
+	const outer_quote_indent = p.line_prefix_indent_len;
+
 	for (let i = p.tokens.length - 1; i > 0; i--) {
 		switch (p.tokens[i]) {
-			case LIST_ITEM:
-				if (p.indent_len < (p.spaces[i] || 0)) return false;
+			case LIST_ITEM: {
+				// For a list item that contains the currently matched blockquote,
+				// combine the indentation before `>` with the indentation after the
+				// quote marker(s). For a list item inside that blockquote, use the
+				// normal post-quote p.indent_len.
+				const indent = outer_quote_indent != null && i < blockquote_idx && p.spaces[blockquote_idx] != null
+					? outer_quote_indent + Math.max(0, p.indent_len - p.spaces[blockquote_idx])
+					: p.indent_len;
+				if (indent < (p.spaces[i] || 0)) return false;
 				break;
+			}
 			case BLOCKQUOTE:
-				if (i > p.blockquote_idx) return false;
+				if (i > blockquote_idx) return false;
 				break;
 		}
 	}
@@ -579,6 +590,7 @@ function parser_write(p, chunk) {
 						}
 						clear_root_pending(p)
 						p.blockquote_idx = 0
+						delete p.line_prefix_indent_len
 						p.fence_start = 0
 						p.pending = char
 						continue
@@ -616,6 +628,7 @@ function parser_write(p, chunk) {
 
 							const idx = p.tokens.length;
 							p.spaces[idx] = p.indent_len;
+							p.line_prefix_indent_len = p.indent_len;
 							p.blockquote_idx = idx;
 							p.fence_start = 0
 							add_token(p, BLOCKQUOTE);
@@ -625,15 +638,27 @@ function parser_write(p, chunk) {
 								reconcile_block_start(p, p.indent_len);
 								const idx = p.tokens.length;
 								p.spaces[idx] = p.indent_len;
+								p.line_prefix_indent_len = p.indent_len;
 								p.blockquote_idx = idx;
 								add_token(p, BLOCKQUOTE);
 							} else {
+								p.line_prefix_indent_len = p.indent_len;
 								p.blockquote_idx = next_blockquote_idx
-								close_pending_linebreak_or_leaf(p)
+								/*
+								Keep a pending LINE_BREAK alive across a repeated `>`
+								marker.  The marker only proves that the existing quote
+								container continues; it does not prove that the previous
+								paragraph has ended.  The first real content/block marker
+								after the quote prefix will resolve the LINE_BREAK: plain
+								text resumes the paragraph, while `#`, `- `, `|`, fences,
+								etc. close the leaf before opening the new block.
+								*/
+								if (p.token !== LINE_BREAK) close_pending_linebreak_or_leaf(p)
 								/*
 								Do not close list/list-item containers here.  `>` only proves
 								that the quote container is still active; the following content
 								indentation decides whether e.g. `>   - nested` belongs inside
+								the previous quoted list item or whether `> para` should close
 								the previous quoted list item or whether `> para` should close
 								that list.  This keeps reconciliation local and streaming.
 								*/
@@ -847,6 +872,7 @@ function parser_write(p, chunk) {
 						// start reconciliation does not pop the current list item.
 						p.continuation_indent_len = p.indent_len;
 					}
+					delete p.line_prefix_indent_len;
 				}
 				/* Code Block */
 				else if (p.indent_len >= 4 && p.options.parseCodeBlock) {
@@ -908,6 +934,7 @@ function parser_write(p, chunk) {
 							// scanning for the next physical row so quote/list
 							// markers can be stripped without creating nested quotes.
 							p.blockquote_idx = 0
+							delete p.line_prefix_indent_len
 							p.pending = ""
 							p.token = NEWLINE
 							continue
@@ -970,6 +997,7 @@ function parser_write(p, chunk) {
 					// Keep the row-ending newline pending while NEWLINE consumes
 					// container prefixes of the next physical line.
 					p.blockquote_idx = 0
+					delete p.line_prefix_indent_len
 					p.pending = "\n"
 					p.token = NEWLINE
 					continue
@@ -1116,6 +1144,7 @@ function parser_write(p, chunk) {
 						p.pending = ""
 						p.token = LINE_BREAK
 						p.blockquote_idx = 0
+						delete p.line_prefix_indent_len
 						flush_text(p)
 						continue
 					/* Trim space before ` */
@@ -1536,6 +1565,7 @@ function parser_write(p, chunk) {
 						flush_text(p)
 						close_leaf_tokens(p)
 						p.blockquote_idx = 0
+						delete p.line_prefix_indent_len
 						p.pending = char
 						continue
 					case EQUATION_INLINE:
@@ -1550,6 +1580,7 @@ function parser_write(p, chunk) {
 						p.pending = char
 						p.token = LINE_BREAK;
 						p.blockquote_idx = 0
+						delete p.line_prefix_indent_len
 
 						//delete p.prev_text;
 						p.prev_text = "\n";

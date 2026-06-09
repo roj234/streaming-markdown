@@ -1,0 +1,4 @@
+import * as md from './streaming-markdown-parser.js';
+
+const names = Object.fromEntries(Object.entries(md).filter(([k,v])=>typeof v==='number').map(([k,v])=>[v,k]));
+const ev=[];const renderer={add_text(t,p){ev.push(['text',t,[...p.tokens].map(x=>names[x]).join('>')]);},add_token(tok,p,arg){ev.push(['start',names[tok],[...p.tokens].map(x=>names[x]).join('>')]);},end_token(tok,p){ev.push(['end',names[tok],[...p.tokens].map(x=>names[x]).join('>')]);return ''},set_attr(a,v){ev.push(['attr',a,v])}};const p=md.createMarkdownParser(renderer,{parseCodeBlock:true});p.write('- a\n  cont\n');p.end();console.log(ev.map(JSON.stringify).join('\n'));
