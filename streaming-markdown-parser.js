@@ -169,6 +169,69 @@ const flush_text = p => {
  */
 const get_last_char = p => p.text.slice(-1) || p.prev_text || "";
 
+const is_container_token = token =>
+	token === DOCUMENT ||
+	token === BLOCKQUOTE ||
+	token === LIST_ORDERED ||
+	token === LIST_UNORDERED ||
+	token === LIST_ITEM;
+
+/**
+ * Close inline/leaf tokens at the end of a physical line, while keeping
+ * structural containers (blockquote/list/list item) alive until the next line
+ * prefix proves they should be closed. This is the main trick that lets the
+ * parser stay streaming and state-machine based without reparsing completed
+ * lines.
+ * @param {Parser} p
+ */
+function close_leaf_tokens(p) {
+	while (p.tokens.length > 1 && !is_container_token(p.tokens.at(-1))) {
+		if (p.tokens.at(-1) === HTML_ELEMENT) break;
+		p.token = p.tokens.at(-1);
+		end_token(p);
+	}
+	p.token = p.tokens.at(-1);
+}
+
+/**
+ * A physical line break is represented by p.token === LINE_BREAK while the
+ * leaf block being broken is still the top real token in p.tokens.  When the
+ * next line starts with an explicit block marker (quote/list/heading/...), we
+ * need to consume that pending break and pop only the leaf block, but keep
+ * surrounding containers alive until indentation/content reconciliation decides
+ * their fate.
+ * @param {Parser} p
+ */
+function close_pending_linebreak_or_leaf(p) {
+	if (p.token === LINE_BREAK && p.tokens.length > 1 && !is_container_token(p.tokens.at(-1))) {
+		end_token(p);
+		return;
+	}
+	close_leaf_tokens(p);
+}
+
+/**
+ * Whether a non-marker line can be treated as a soft continuation of the
+ * previous leaf block. We deliberately do not implement blockquote laziness:
+ * a line inside a blockquote must repeat its `>` marker, which keeps nested
+ * block reconciliation local and cheap for streaming.
+ * @param {Parser} p
+ * @returns {boolean}
+ */
+function can_continue_linebreak(p) {
+	for (let i = p.tokens.length - 1; i > 0; i--) {
+		switch (p.tokens[i]) {
+			case LIST_ITEM:
+				if (p.indent_len < (p.spaces[i] || 0)) return false;
+				break;
+			case BLOCKQUOTE:
+				if (i > p.blockquote_idx) return false;
+				break;
+		}
+	}
+	return true;
+}
+
 const URL_VALID_CHARS = /[a-zA-Z0-9%/!@#$&*()_+~=,.?';:-]/;
 const SPACE_LIKE = new Set(" \r\n\t，。：？；’”）】》".split(""));
 const DELIMITER = new Set("(（“‘《【".split(""));
@@ -221,23 +284,67 @@ function end_tokens_to_len(p, len) {
 }
 
 /**
+ * Close containers whose indentation no longer covers the current physical
+ * line.  `blockquote_idx` is the deepest quote marker already matched on this
+ * line, so it acts as a floor: blockquotes are not lazy, but an explicitly
+ * repeated `>` must keep that quote open even when the content indent is 0.
+ *
+ * Only LIST_ITEM has a meaningful continuation column.  LIST_ORDERED /
+ * LIST_UNORDERED themselves are structural wrappers and must not be selected as
+ * indentation anchors merely because their stored space defaults to 0; otherwise
+ * lines such as `> para` after `> - item` would accidentally keep an empty list.
  * @param {Parser} p
  * @param {number} indent
- * @returns {number} */
+ * @returns {number} kept stack depth */
+
+/**
+ * Reconcile containers before starting a block at the current line/content
+ * indentation.  The first block directly produced by a list marker (`- foo`,
+ * `1. # h`, `- [x] task`) is allowed to live inside the just-created item even
+ * though the marker text has been consumed and p.indent_len was reset to 0.
+ * Later physical lines must pass the normal indentation check.
+ * @param {Parser} p
+ * @param {number=} indent
+ * @returns {number}
+ */
+function reconcile_block_start(p, indent = p.indent_len) {
+	if (p.list_item_start_pending) {
+		p.list_item_start_pending = 0;
+		return p.tokens.length - 1;
+	}
+	if (p.continuation_indent_len != null) {
+		indent = p.continuation_indent_len;
+		delete p.continuation_indent_len;
+	}
+	return end_tokens_to_indent(p, indent);
+}
+
 function end_tokens_to_indent(p, indent) {
 	if (!indent) p.skipNextBr = 0;
 
-	let i;
-	for (i = 0; i < p.tokens.length; i++) {
-		if ((p.spaces[i] || 0) >= indent) break;
+	const floor = p.blockquote_idx || 0;
+	let keep = floor;
+
+	for (let i = floor + 1; i < p.tokens.length; i++) {
+		switch (p.tokens[i]) {
+			case LIST_ITEM:
+				if (indent >= (p.spaces[i] || 0)) {
+					keep = i;
+					continue;
+				}
+				break;
+			case DOCUMENT:
+			case LIST_ORDERED:
+			case LIST_UNORDERED:
+				// Wrapper containers are kept only when their parent item/quote
+				// is kept; they are not indentation anchors by themselves.
+				continue;
+		}
+		break;
 	}
 
-	while ((p.tokens.length - 1) > i) {
-		if (p.tokens.at(-1) === HTML_ELEMENT) break;
-		end_token(p);
-	}
-
-	//return indent
+	end_tokens_to_len(p, keep);
+	return keep;
 }
 
 /**
@@ -283,8 +390,9 @@ function continue_or_add_list(p, list_token) {
 }
 
 /**
- * Create a new list
- * or continue the last one
+ * Create a new list item in the current list.  The continuation column is the
+ * column after the marker (`- ` / `12. `).  A renderer receives LIST_ITEM before
+ * the marker is consumed, so update p.spaces after add_token().
  * @param {Parser} p
  * @param {number} prefix_length
  * @returns {void} */
@@ -292,6 +400,7 @@ function add_list_item(p, prefix_length) {
 	p.skipNextBr = 0;
 	add_token(p, LIST_ITEM)
 	p.spaces[(p.tokens.length - 1)] = p.indent_len + prefix_length
+	p.list_item_start_pending = 1
 	clear_root_pending(p)
 	p.token = MAYBE_TASK
 }
@@ -352,14 +461,39 @@ function parser_write(p, chunk) {
 					}
 			}
 
-			let indent = p.indent_len - p.spaces[p.tokens.length-1];//end_tokens_to_indent(p, p.indent_len)
+			if (p.tokens.includes(TABLE)) {
+				// Tables are leaf blocks but their next physical row still needs
+				// the surrounding container prefixes (`>`, list indentation)
+				// stripped before TABLE_ROW/TABLE sees the first `|`/cell char.
+				// Do not reconcile/close the table stack here.
+				const next_blockquote_idx = char === '>' && p.tokens.indexOf(BLOCKQUOTE, p.blockquote_idx + 1)
+				if (next_blockquote_idx > 0 && (p.spaces[next_blockquote_idx] || 0) <= p.indent_len) {
+					p.blockquote_idx = next_blockquote_idx
+					continue
+				}
+				p.fence_line = 0
+				p.indent_len = 0
+				p.token = p.tokens.at(-1)
+			} else if (p.tokens.at(-1) === CODE_FENCE) {
+				const indent = p.indent_len - (p.spaces[p.tokens.length-1] || 0);
+				p.fence_line = 0
+				p.indent_len = 0
+				p.token = CODE_FENCE
 
-			p.fence_line = 0
-			p.indent_len = 0
-			p.token = p.tokens.at(-1)
+				if (indent > 0) {
+					parser_write(p, " ".repeat(indent))
+				}
+			} else {
+				let indent = p.indent_len - p.spaces[p.tokens.length-1];//close_leaf_tokens(p)
+				end_tokens_to_indent(p, p.indent_len)
 
-			if (indent > 0) {
-				parser_write(p, " ".repeat(indent))
+				p.fence_line = 0
+				p.indent_len = 0
+				p.token = p.tokens.at(-1)
+
+				if (indent > 0) {
+					parser_write(p, " ".repeat(indent))
+				}
 			}
 		}
 
@@ -387,6 +521,7 @@ function parser_write(p, chunk) {
 			case BLOCKQUOTE:
 			case LIST_ORDERED:
 			case LIST_UNORDERED:
+			case LIST_ITEM:
 				console.assert(p.text.length === 0, "Root should not have any text")
 			// noinspection FallThroughInSwitchStatementJS
 			case HTML_ELEMENT:
@@ -413,10 +548,11 @@ function parser_write(p, chunk) {
 						console.assert(p.pending.length === 1)
 						p.prev_text = '\n';
 						/*
-						 Lists can have an empty line in between items:
-						 1. foo
-						 <empty>
-						 2. bar
+						 The line prefix is part of the block state machine. Do not close
+						 containers here: the first real marker of the next line (`>`, `-`,
+						 `1.`, table, fence, ...) will reconcile the stack with its indent.
+						 This keeps nested list/blockquote blocks alive across physical lines,
+						 while still requiring only O(current nesting depth) work.
 						*/
 						if (p.token === LINE_BREAK) {
 							switch (p.tokens.at(-1)) {
@@ -435,11 +571,12 @@ function parser_write(p, chunk) {
 							}
 						}
 
-						/*
-						 Exit out of tokens
-						 And ignore newlines in root
-						*/
-						end_tokens_to_len(p, p.blockquote_idx)
+						if (char === '\n') {
+							// A blank line is a real block boundary. Lists may opt in to
+							// keeping the next break via skipNextBr, but leaf blocks close now.
+							close_leaf_tokens(p)
+							if (p.tokens.at(-1) === LIST_ITEM) p.skipNextBr = 1;
+						}
 						clear_root_pending(p)
 						p.blockquote_idx = 0
 						p.fence_start = 0
@@ -455,7 +592,8 @@ function parser_write(p, chunk) {
 								}
 								break // fail
 							case ' ':
-								end_tokens_to_indent(p, p.indent_len)
+								close_leaf_tokens(p)
+								reconcile_block_start(p, p.indent_len)
 								add_token(p, HEADING_1 + p.pending.length - 1)
 								clear_root_pending(p)
 								continue
@@ -466,30 +604,47 @@ function parser_write(p, chunk) {
 						let next_blockquote_idx = p.tokens.indexOf(BLOCKQUOTE, p.blockquote_idx + 1)
 
 						/*
-						Only when there is no blockquote to the right of blockquote_idx
-						a new blockquote can be created
+						Match an existing quote container on this line when possible; otherwise
+						create a new quote at the current block parent. blockquote_idx is a
+						stack index, not a quote depth, so compute it from tokens.length before
+						add_token(). This matters for quotes nested in list items.
 						*/
 						if (next_blockquote_idx === -1) {
 							if (p.blockquote_idx) end_tokens_to_len(p, p.blockquote_idx);
-							else end_tokens_to_indent(p, p.indent_len);
+							else close_leaf_tokens(p)
+							reconcile_block_start(p, p.indent_len);
 
-							// 这个数组应该可以复用？
-							p.spaces[p.tokens.length - 1] = p.indent_len;
-							p.blockquote_idx += 1
+							const idx = p.tokens.length;
+							p.spaces[idx] = p.indent_len;
+							p.blockquote_idx = idx;
 							p.fence_start = 0
 							add_token(p, BLOCKQUOTE);
 						} else {
-							// 这个是否需要移到外面？
 							if (p.spaces[next_blockquote_idx] > p.indent_len) {
-								end_tokens_to_indent(p, p.indent_len);
-								p.spaces[p.tokens.length] = p.indent_len;
+								close_pending_linebreak_or_leaf(p)
+								reconcile_block_start(p, p.indent_len);
+								const idx = p.tokens.length;
+								p.spaces[idx] = p.indent_len;
+								p.blockquote_idx = idx;
 								add_token(p, BLOCKQUOTE);
+							} else {
+								p.blockquote_idx = next_blockquote_idx
+								close_pending_linebreak_or_leaf(p)
+								/*
+								Do not close list/list-item containers here.  `>` only proves
+								that the quote container is still active; the following content
+								indentation decides whether e.g. `>   - nested` belongs inside
+								the previous quoted list item or whether `> para` should close
+								that list.  This keeps reconciliation local and streaming.
+								*/
 							}
-							p.blockquote_idx = next_blockquote_idx
 						}
 
 						clear_root_pending(p)
-						p.pending = char
+						// A single space after `>` is the quote marker separator,
+						// not content indentation.  Additional spaces are still
+						// collected by the normal line-prefix state machine.
+						p.pending = char === ' ' ? "" : char
 						continue
 					}
 					/* Horizontal Rule
@@ -515,7 +670,8 @@ function parser_write(p, chunk) {
 									continue
 								case '\n':
 									if (p.hr_chars < 3) break
-									end_tokens_to_indent(p, p.indent_len)
+									close_leaf_tokens(p)
+									reconcile_block_start(p, p.indent_len)
 									p.renderer.add_token(RULE, p)
 									p.renderer.end_token(RULE, p);
 									clear_root_pending(p)
@@ -581,12 +737,15 @@ function parser_write(p, chunk) {
 								/*  ```lang\n
 											^
 								*/
-								end_tokens_to_indent(p, p.indent_len)
+								const fence_start = p.fence_start;
+								close_leaf_tokens(p)
+								reconcile_block_start(p, p.indent_len)
 
 								add_token(p, CODE_FENCE)
+								p.fence_start = fence_start;
 								p.spaces[p.tokens.length - 1] = p.indent_len;
-								if (p.pending.length > p.fence_start) {
-									p.renderer.set_attr(LANG, p.pending.slice(p.fence_start))
+								if (p.pending.length > fence_start) {
+									p.renderer.set_attr(LANG, p.pending.slice(fence_start))
 								}
 								clear_root_pending(p)
 								p.token = NEWLINE
@@ -635,7 +794,8 @@ function parser_write(p, chunk) {
 					/* Table */
 					case '|':
 						/*if (p.blockquote_idx) end_tokens_to_len(p, p.blockquote_idx);
-						else */end_tokens_to_indent(p, p.indent_len);
+						else */close_leaf_tokens(p)
+						reconcile_block_start(p, p.indent_len);
 
 						delete p.table_align;
 						add_token(p, TABLE)
@@ -651,12 +811,13 @@ function parser_write(p, chunk) {
 
 				/* Add a line break and continue in previous token */
 				if (p.token === LINE_BREAK || p.skipNextBr) {
-					if (p.skipNextBr === 1) end_tokens_to_len(p, p.blockquote_idx);
+					const continued = can_continue_linebreak(p);
+					if (!continued) end_tokens_to_len(p, p.blockquote_idx);
 
 					p.token = p.tokens.at(-1);
 
 					// TODO better latex parse ??
-					if (!p.skipNextBr && to_write !== "$$") {
+					if (continued && !p.skipNextBr && to_write !== "$$") {
 						if ((p.end_with_space || p.options.preserveLineBreaks)) {
 							p.renderer.add_token(LINE_BREAK, p);
 							p.renderer.end_token(LINE_BREAK, p);
@@ -667,9 +828,29 @@ function parser_write(p, chunk) {
 						p.prev_text = '\n';
 					}
 					p.skipNextBr = 0;
+
+					if (!is_container_token(p.token)) {
+						clear_root_pending(p)
+						parser_write(p, to_write)
+						continue
+					}
+
+					if (p.token === DOCUMENT) {
+						// A continuation line that no longer belongs to an open
+						// container is an ordinary top-level line.  Its leading
+						// indentation was only structural probing input.
+						p.indent = "";
+						p.indent_len = 0;
+					} else if (continued && p.token === LIST_ITEM) {
+						// The structural indentation is consumed before the first
+						// content character is replayed; remember it so paragraph
+						// start reconciliation does not pop the current list item.
+						p.continuation_indent_len = p.indent_len;
+					}
 				}
 				/* Code Block */
 				else if (p.indent_len >= 4 && p.options.parseCodeBlock) {
+					reconcile_block_start(p, p.indent_len)
 					/*
 					Case where there are additional spaces
 					after the indent that makes the code block
@@ -694,6 +875,7 @@ function parser_write(p, chunk) {
 				}
 				/* Paragraph */
 				else if (p.token !== HTML_ELEMENT) {
+					reconcile_block_start(p, p.indent_len)
 					add_token(p, PARAGRAPH);
 				} else {
 					break;
@@ -722,7 +904,12 @@ function parser_write(p, chunk) {
 							p.td_index = 0;
 
 							p.table_state = 2
+							// The delimiter row is complete.  Enter line-prefix
+							// scanning for the next physical row so quote/list
+							// markers can be stripped without creating nested quotes.
+							p.blockquote_idx = 0
 							p.pending = ""
+							p.token = NEWLINE
 							continue
 						default:
 							end_token(p)
@@ -771,6 +958,22 @@ function parser_write(p, chunk) {
 				}
 				break
 			case TABLE_CELL:
+				if (char === "\n") {
+					if (p.pending === "|") {
+						flush_text(p)
+					} else if (p.pending) {
+						p.text += p.pending
+						flush_text(p)
+					}
+					p.pending = ""
+					end_token(p)
+					// Keep the row-ending newline pending while NEWLINE consumes
+					// container prefixes of the next physical line.
+					p.blockquote_idx = 0
+					p.pending = "\n"
+					p.token = NEWLINE
+					continue
+				}
 				if (p.pending === "|") {
 					flush_text(p)
 					if (p.table_align)
@@ -779,11 +982,6 @@ function parser_write(p, chunk) {
 					p.pending = ""
 					parser_write(p, char)
 					continue
-				}
-				if (char === "\n") {
-					//retractWithPrefix(p, "", "");
-					const s = end_token(p, true);
-					parser_write(p, s);
 				}
 				break
 			case CODE_BLOCK:
@@ -843,8 +1041,7 @@ function parser_write(p, chunk) {
 								p.fence_start = 0
 								p.fence_line = 0
 								p.blockquote_depth = 0;
-								p.blockquote_idx = 0;
-								p.token = DOCUMENT;
+								p.token = NEWLINE;
 								continue
 							}
 							p.fence_depth--;
@@ -1198,7 +1395,7 @@ function parser_write(p, chunk) {
 							const orig = p.tag_st;
 							p.tag_st = 2;
 							if (orig === 1) continue;
-							// fallthrough: 强行结束不合法的属性
+						// fallthrough: 强行结束不合法的属性
 
 						case '"':
 							if (!p.tag_st) {
@@ -1337,7 +1534,7 @@ function parser_write(p, chunk) {
 					case HEADING_5:
 					case HEADING_6:
 						flush_text(p)
-						end_tokens_to_len(p, p.blockquote_idx)
+						close_leaf_tokens(p)
 						p.blockquote_idx = 0
 						p.pending = char
 						continue

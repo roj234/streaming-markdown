@@ -107,6 +107,12 @@ export interface Parser {
     eq_dollar?: string;
     // list next line helper
     skipNextBr?: number;
+    // 当前列表项的首个子块还未开始（marker 刚被消费）
+    list_item_start_pending?: number;
+    // 行续接时保留下来的结构缩进，用于下一子块开始前的容器对齐
+    continuation_indent_len?: number;
+    // 当前物理行在 blockquote marker 之前的缩进，用于判断 `list item > quote` 的续行
+    line_prefix_indent_len?: number;
     // BlockQuote -> Code Fence
     blockquote_depth?: number;
 
