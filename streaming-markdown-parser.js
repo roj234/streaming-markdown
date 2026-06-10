@@ -339,6 +339,15 @@ function commitNoValueAttr(p) {
 	if (tag_attr) p.renderer.set_attr(tag_attr, '');
 }
 
+function endElement(p, pending_with_char) {
+	commitNoValueAttr(p);
+
+	p.token = HTML_ELEMENT;
+	if (pending_with_char.endsWith("/>") || VOID_TAGS.has(p.tag_id)) {
+		closeHtmlTag(p);
+	}
+}
+
 /**
  * Parse and render another chunk of markdown.
  * @param {Parser} p
@@ -1228,10 +1237,12 @@ function parser_write(p, chunk) {
 							else p.tag_st = 0;
 
 						case ' ':
+						case '>':
 							if (!p.tag_st) {
 								p.renderer.set_attr(p.tag_attr, p.pending);
 								p.pending = "";
-								p.token = HTML_ATTR;
+								if (char === '>') endElement(p, pending_with_char);
+								else p.token = HTML_ATTR;
 								continue;
 							}
 					}
@@ -1248,12 +1259,7 @@ function parser_write(p, chunk) {
 						p.token = HTML_ATTR_VAL;
 						break;
 					case '>':
-						commitNoValueAttr(p);
-
-						p.token = HTML_ELEMENT;
-						if (pending_with_char.endsWith("/>") || VOID_TAGS.has(p.tag_id)) {
-							closeHtmlTag(p);
-						}
+						endElement(p, pending_with_char);
 						break;
 				}
 				continue;
