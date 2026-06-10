@@ -44,9 +44,7 @@ export const
 	CODE_FENCE      = 10,
 	CODE_INLINE     = 11,
 	ITALIC_AST      = 12,
-	ITALIC_UND      = 13,
 	STRONG_AST      = 14,
-	STRONG_UND      = 15,
 	STRIKE          = 16,
 	LINK            = 17,
 	RAW_URL         = 18,
@@ -77,9 +75,7 @@ export const
 const INLINE_TOKEN_PREFIX = new Map;
 INLINE_TOKEN_PREFIX.set(CODE_INLINE, '`');
 INLINE_TOKEN_PREFIX.set(ITALIC_AST, '*');
-INLINE_TOKEN_PREFIX.set(ITALIC_UND, '_');
 INLINE_TOKEN_PREFIX.set(STRONG_AST, '**');
-INLINE_TOKEN_PREFIX.set(STRONG_UND, '__');
 //INLINE_PREFIX.set(STRIKE, '~~');
 INLINE_TOKEN_PREFIX.set(LINK, '[');
 INLINE_TOKEN_PREFIX.set(IMAGE, '![');
@@ -455,8 +451,6 @@ function parser_write(p, chunk) {
 
 								case ITALIC_AST:
 								case STRONG_AST:
-								case ITALIC_UND:
-								case STRONG_UND:
 								case CODE_INLINE:
 									retractWithPrefix(p, INLINE_TOKEN_PREFIX.get(p.tokens.at(-1)), char);
 									p.pending = char;
@@ -990,21 +984,13 @@ function parser_write(p, chunk) {
 				p.pending = ""
 				parser_write(p, pending_with_char)
 				continue
-			case STRONG_AST:
-			case STRONG_UND: {
-				let symbol = '*'
-				let italic = ITALIC_AST
-				if (p.token === STRONG_UND) {
-					symbol = '_'
-					italic = ITALIC_UND
-				}
-
-				if (symbol === p.pending) {
+			case STRONG_AST: {
+				if ('*' === p.pending) {
 					flush_text(p)
 					/* **Bold**
 							  ^
 					*/
-					if (symbol === char) {
+					if ('*' === char) {
 						end_token(p)
 						p.pending = ""
 						continue
@@ -1013,7 +999,7 @@ function parser_write(p, chunk) {
 							  ^
 					*/
 					if (/\S/.test(char)) {
-						add_token(p, italic)
+						add_token(p, ITALIC_AST)
 						p.pending = char
 						continue
 					}
@@ -1021,23 +1007,15 @@ function parser_write(p, chunk) {
 
 				break
 			}
-			case ITALIC_AST:
-			case ITALIC_UND: {
-				let symbol = '*'
-				let strong = STRONG_AST
-				if (p.token === ITALIC_UND) {
-					symbol = '_'
-					strong = STRONG_UND
-				}
-
+			case ITALIC_AST: {
 				switch (p.pending) {
-					case symbol:
-						if (symbol === char) {
+					case '*':
+						if ('*' === char) {
 							/* Decide between ***bold>em**em* and **bold*bold>em***
 														 ^                       ^
 							   With the help of the next character
 							*/
-							if (p.tokens.at(-2) === strong) {
+							if (p.tokens.at(-2) === STRONG_AST) {
 								p.pending = pending_with_char
 							}
 							/* *em**bold
@@ -1045,7 +1023,7 @@ function parser_write(p, chunk) {
 							*/
 							else {
 								flush_text(p)
-								add_token(p, strong)
+								add_token(p, STRONG_AST)
 								p.pending = ""
 							}
 						}
@@ -1053,7 +1031,7 @@ function parser_write(p, chunk) {
 							   ^
 						*/
 						else {
-							if (symbol === '_' && /\S/.test(char)) {
+							if ('*' === '_' && /\S/.test(char)) {
 								retractWithPrefix(p, '_', '');
 								p.text = pending_with_char;
 								p.pending = "";
@@ -1065,7 +1043,7 @@ function parser_write(p, chunk) {
 
 						}
 						continue
-					case symbol+symbol:
+					case '*'+'*':
 						const italic = p.token
 						flush_text(p)
 						end_token(p)
@@ -1073,7 +1051,7 @@ function parser_write(p, chunk) {
 						/* ***bold>em**em* or **bold*bold>em***
 									   ^                      ^
 						*/
-						if (symbol !== char) {
+						if ('*' !== char) {
 							add_token(p, italic)
 							p.pending = char
 						} else {
@@ -1440,7 +1418,6 @@ function parser_write(p, chunk) {
 				}
 
 				break;
-			case '_':
 			case '*': {
 				if (p.token === IMAGE ||
 					p.token === EQUATION_BLOCK ||
@@ -1448,31 +1425,20 @@ function parser_write(p, chunk) {
 					p.token === STRONG_AST)
 					break
 
-				let italic = ITALIC_AST
-				let strong = STRONG_AST
-				const symbol = p.pending[0]
-				if ('_' === symbol) {
-					//https://github.com/thetarnav/streaming-markdown/pull/29
-					if (p.token === LINK)
-						break
-					italic = ITALIC_UND
-					strong = STRONG_UND
-				}
-
 				if (p.pending.length === 1) {
 					/* **Strong**
 						^
 					*/
-					if (symbol === char) {
+					if ('*' === char) {
 						p.pending = pending_with_char
 						continue
 					}
 					/* *Em*
 						^
 					*/
-					if ('\n' !== char && ' ' !== char && (symbol !== '_' || isSpaceLike(get_last_char(p)))) {
+					if ('\n' !== char && ' ' !== char) {
 						flush_text(p)
-						add_token(p, italic);
+						add_token(p, ITALIC_AST);
 						p.pending = char
 						continue
 					}
@@ -1480,19 +1446,19 @@ function parser_write(p, chunk) {
 					/* ***Strong->Em***
 						 ^
 					*/
-					if (symbol === char) {
+					if ('*' === char) {
 						flush_text(p)
-						add_token(p, strong)
-						add_token(p, italic)
+						add_token(p, STRONG_AST)
+						add_token(p, ITALIC_AST)
 						p.pending = ""
 						continue
 					}
 					/* **Strong**
 						 ^
 					*/
-					if ('\n' !== char && ' ' !== char && (symbol !== '_' || isSpaceLike(get_last_char(p)))) {
+					if ('\n' !== char && ' ' !== char) {
 						flush_text(p)
-						add_token(p, strong)
+						add_token(p, STRONG_AST)
 						p.pending = char
 						continue
 					}
