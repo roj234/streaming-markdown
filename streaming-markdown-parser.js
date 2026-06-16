@@ -324,9 +324,8 @@ function retractWithPrefix(p, prefix, postfix) {
 function closeHtmlTag(p) {
 	flush_text(p);
 	p.pending = "";
-	// TODO is this required ?
 	end_tokens_to_len(p, 0);
-	end_token(p);
+	return end_token(p);
 }
 
 function commitNoValueAttr(p) {
@@ -1255,7 +1254,10 @@ function parser_write(p, chunk) {
 						if (htmlTags.has(rest)) {
 							p.pending = pending_with_char;
 							if (htmlTags.get(rest) && char === '>') {
-								closeHtmlTag(p);
+								let nodeName;
+								do {
+									nodeName = closeHtmlTag(p);
+								} while (nodeName && nodeName !== rest.toUpperCase());
 								p.skipNextBr = 2;
 								//end_tokens_to_len(p, 0);
 							}
