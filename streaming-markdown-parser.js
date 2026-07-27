@@ -752,21 +752,25 @@ function parser_write(p, chunk) {
 							break
 					}
 				} else {
-					switch (p.pending) {
-						case "|":
-							add_token(p, TABLE_ROW)
-							p.pending = ""
-							parser_write(p, char)
-							continue
-						case "\n":
-							end_token(p)
-							clear_root_pending(p)
-							//p.token = LINE_BREAK;
-							p.pending = ""
-							p.table_state = 0
-							parser_write(p, char)
-							continue
+					const s1 = p.pending.trim();
+					if (s1 === '|') {
+						add_token(p, TABLE_ROW)
+						p.pending = ""
+						parser_write(p, char)
+						continue
 					}
+					if (s1) {
+						end_token(p)
+						clear_root_pending(p)
+						//p.token = LINE_BREAK;
+						p.pending = ""
+						p.table_state = 0
+						parser_write(p, s1+char)
+						continue
+					}
+
+					p.pending = pending_with_char;
+					continue;
 				}
 				break
 			case TABLE_ROW:
