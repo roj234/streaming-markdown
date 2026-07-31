@@ -324,6 +324,7 @@ function retractWithPrefix(p, prefix, postfix) {
 function closeHtmlTag(p) {
 	flush_text(p);
 	p.pending = "";
+	if (p.tokens.lastIndexOf(HTML_ELEMENT) < 0) return;
 	end_tokens_to_len(p, 0);
 	return end_token(p);
 }
