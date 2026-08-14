@@ -1577,8 +1577,7 @@ function parser_write(p, chunk) {
 			p.token !== EQUATION_BLOCK &&
 			p.token !== EQUATION_INLINE &&
 			'h' === char &&
-			(" " === p.pending ||
-				""  === p.pending)
+			(isSpaceLike(p.pending))
 		) {
 			p.text   += p.pending
 			p.pending = char
