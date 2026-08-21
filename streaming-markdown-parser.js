@@ -1567,6 +1567,10 @@ function parser_write(p, chunk) {
 				if (char !== "\n") p.end_with_space = false;
 				//else p.prev_text = '\n';
 				break
+			case '|':
+				if (p.tokens.lastIndexOf(TABLE_ROW) > 0)
+					retractWithPrefix(p, INLINE_TOKEN_PREFIX.get(p.token), char);
+				break
 		}
 
 		/* foo http://...
