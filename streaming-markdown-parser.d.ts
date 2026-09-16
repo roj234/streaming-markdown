@@ -59,6 +59,8 @@ export interface ParserOptions {
     allowedTags?: string[] | TrieTree;
     /** 不解析 markdown 标记的 HTML 标签，已经包含style和script，可以增加更多 */
     textTags?: Set<string>;
+    /** 性能优化，如果数据不要求立即emit */
+    stream?: boolean;
 }
 
 export interface Parser {

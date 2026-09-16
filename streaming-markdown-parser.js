@@ -396,7 +396,7 @@ function parser_write(p, chunk) {
 		switch (p.token) {
 			case HTML_ELEMENT:
 				// HTML_ELEMENT only
-				flush_text(p);
+				if (p.options.stream) flush_text(p);
 				if (get_last_char(p)) break;
 			// noinspection FallThroughInSwitchStatementJS
 			case LINE_BREAK:
@@ -1580,6 +1580,7 @@ function parser_write(p, chunk) {
 			p.token !== LINK &&
 			p.token !== EQUATION_BLOCK &&
 			p.token !== EQUATION_INLINE &&
+			p.token !== HTML_ELEMENT &&
 			'h' === char &&
 			(isSpaceLike(p.pending))
 		) {
@@ -1597,5 +1598,5 @@ function parser_write(p, chunk) {
 		p.pending = char
 	}
 
-	flush_text(p)
+	if (p.options.stream) flush_text(p)
 }
